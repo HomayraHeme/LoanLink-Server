@@ -3,6 +3,8 @@ const cors = require('cors')
 const app = express()
 require('dotenv').config();
 const { MongoClient, ServerApiVersion } = require('mongodb');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
 const port = process.env.PORT || 3000
 const { ObjectId } = require('mongodb');
 
@@ -153,6 +155,73 @@ async function run() {
                 res.status(500).json({ error: 'Server error' });
             }
         });
+
+
+        // payment Api
+        app.post('/create-payment-session', async (req, res) => {
+            const paymentInfo = req.body;
+
+            try {
+                const session = await stripe.checkout.sessions.create({
+                    payment_method_types: ['card'],
+                    line_items: [
+                        {
+                            price_data: {
+                                currency: 'usd',
+                                product_data: { name: 'Loan Application Fee' },
+                                unit_amount: 1000, // $10 in cents
+                            },
+                            quantity: 1,
+                        },
+                    ],
+                    mode: 'payment',
+                    customer_email: paymentInfo.userEmail,
+                    success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+                    cancel_url: `${process.env.SITE_DOMAIN}/dashboard/my-loans`,
+                    metadata: {
+                        loanId: paymentInfo.loanId,
+                    },
+                });
+
+                res.status(200).json({ url: session.url });
+            } catch (error) {
+                console.error("Stripe session error:", error);
+                res.status(500).json({ error: 'Failed to create Stripe session' });
+            }
+        });
+
+        app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+            const sig = req.headers['stripe-signature'];
+            const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+            let event;
+
+            try {
+                event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
+            } catch (err) {
+                console.error('Webhook signature verification failed:', err.message);
+                return res.status(400).send(`Webhook Error: ${err.message}`);
+            }
+
+            if (event.type === 'checkout.session.completed') {
+                const session = event.data.object;
+                const loanId = session.metadata.loanId;
+
+                try {
+                    // Update the Loan Application Fee status to Paid
+                    const result = await client.db("LoanLinkDB").collection("loanApplications").updateOne(
+                        { _id: new ObjectId(loanId) },
+                        { $set: { applicationFeeStatus: 'Paid', paymentDetails: session } }
+                    );
+                    console.log('Loan fee status updated:', result.modifiedCount);
+                } catch (err) {
+                    console.error('Failed to update loan status:', err);
+                }
+            }
+
+            res.json({ received: true });
+        });
+
 
 
 
