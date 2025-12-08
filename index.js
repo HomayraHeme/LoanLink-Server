@@ -74,6 +74,7 @@ async function run() {
                 return res.status(400).json({ message: "Missing required application fields." });
             }
 
+
             try {
                 // Ensure default status values are set if not provided by frontend
                 const finalApplication = {
@@ -94,6 +95,26 @@ async function run() {
                 res.status(500).json({ message: 'Server error processing application submission.' });
             }
         });
+
+        app.get('/loan-applications', async (req, res) => { // ⬅️ এটি এখন সঠিক স্থানে রয়েছে
+            const userEmail = req.query.email;
+
+            if (!userEmail) {
+                return res.status(400).json({ message: "Email query parameter is required." });
+            }
+
+            try {
+                const applications = await loanApplicationsCollection.find({ userEmail: userEmail }).toArray();
+                res.json(applications);
+            } catch (err) {
+                console.error("Error fetching user applications:", err);
+                res.status(500).json({ message: 'Server error fetching user applications' });
+            }
+        });
+
+
+
+
 
 
         // Ping to confirm connection (Optional, but good practice)
