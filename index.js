@@ -31,6 +31,7 @@ async function run() {
         const db = client.db("LoanLinkDB");
         const loansCollection = db.collection("loans");
         const usersCollection = db.collection("users");
+        const loanApplicationsCollection = db.collection("loanApplications");
 
         console.log("Pinged your deployment. You successfully connected to MongoDB! 🟢");
 
@@ -61,6 +62,36 @@ async function run() {
             } catch (err) {
                 console.error('Error fetching loan:', err);
                 res.status(500).json({ message: 'Server error fetching loan' });
+            }
+        });
+
+
+        app.post('/loan-applications', async (req, res) => {
+            const applicationData = req.body;
+
+            // Basic validation check (optional, but recommended)
+            if (!applicationData.userEmail || !applicationData.loanAmount) {
+                return res.status(400).json({ message: "Missing required application fields." });
+            }
+
+            try {
+                // Ensure default status values are set if not provided by frontend
+                const finalApplication = {
+                    ...applicationData,
+                    status: applicationData.status || 'Pending',
+                    applicationFeeStatus: applicationData.applicationFeeStatus || 'Unpaid',
+                    appliedAt: new Date()
+                };
+
+                const result = await loanApplicationsCollection.insertOne(finalApplication);
+
+                res.status(201).json({
+                    message: 'Loan application submitted successfully!',
+                    insertedId: result.insertedId
+                });
+            } catch (error) {
+                console.error('Error submitting loan application:', error);
+                res.status(500).json({ message: 'Server error processing application submission.' });
             }
         });
 
