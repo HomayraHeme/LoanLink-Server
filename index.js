@@ -96,7 +96,7 @@ async function run() {
             }
         });
 
-        app.get('/loan-applications', async (req, res) => { // ⬅️ এটি এখন সঠিক স্থানে রয়েছে
+        app.get('/loan-applications', async (req, res) => {
             const userEmail = req.query.email;
 
             if (!userEmail) {
@@ -111,6 +111,50 @@ async function run() {
                 res.status(500).json({ message: 'Server error fetching user applications' });
             }
         });
+
+
+        // 🧾 Get All Loan Applications for a Specific User
+        app.get('/my-loans', async (req, res) => {
+            const userEmail = req.query.email;
+
+            if (!userEmail) {
+                return res.status(400).json({ message: "Email query parameter is required." });
+            }
+
+            try {
+                const myLoans = await loanApplicationsCollection
+                    .find({ userEmail: userEmail })
+                    .sort({ appliedAt: -1 }) // newest first
+                    .toArray();
+
+                res.json(myLoans);
+            } catch (err) {
+                console.error("Error fetching my loans:", err);
+                res.status(500).json({ message: "Server error fetching loans." });
+            }
+        });
+
+        app.delete('/loan-applications/:id', async (req, res) => {
+            const loanId = req.params.id;
+
+            if (!ObjectId.isValid(loanId)) {
+                return res.status(400).json({ error: 'Invalid loan ID' });
+            }
+
+            try {
+                const result = await loanApplicationsCollection.deleteOne({ _id: new ObjectId(loanId) });
+
+                if (result.deletedCount === 0) {
+                    return res.status(404).json({ message: 'Loan not found' });
+                }
+
+                res.status(200).json({ message: 'Loan deleted successfully' });
+            } catch (error) {
+                res.status(500).json({ error: 'Server error' });
+            }
+        });
+
+
 
 
 
