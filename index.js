@@ -46,27 +46,6 @@ async function run() {
             }
         });
 
-        app.get('/loans/:id', async (req, res) => {
-            const { id } = req.params;
-
-            try {
-                // Convert string ID to Mongo ObjectId
-                const loan = await loansCollection.findOne({ _id: new ObjectId(id) });
-
-                if (!loan) {
-                    return res.status(404).json({ message: 'Loan not found' });
-                }
-
-                res.json(loan);
-            } catch (err) {
-                console.error('Error fetching loan:', err);
-                res.status(500).json({ message: 'Server error fetching loan' });
-            }
-        });
-
-
-        // user save api
-
         // Ping to confirm connection (Optional, but good practice)
         await client.db("admin").command({ ping: 1 });
 
