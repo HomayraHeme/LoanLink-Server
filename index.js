@@ -130,6 +130,67 @@ app.get('/users/:email', verifyFBToken, async (req, res) => {
     }
 });
 
+app.get('/users', verifyFBToken, async (req, res) => {
+    try {
+        const users = await usersCollection.find({}, { projection: { password: 0 } }).toArray();
+        res.json(users);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Server error fetching users" });
+    }
+});
+
+app.patch('/users/:id/role', verifyFBToken, async (req, res) => {
+    const { id } = req.params;
+    const { role } = req.body;
+    if (!role) return res.status(400).json({ message: "Role is required" });
+
+    if (!ObjectId.isValid(id)) {
+        return res.status(400).json({ message: "Invalid user ID format" });
+    }
+
+    try {
+        const result = await usersCollection.findOneAndUpdate(
+            { _id: new ObjectId(id) },
+            { $set: { role } },
+            { returnDocument: "after" }
+        );
+
+        if (!result.value) return res.status(404).json({ message: "User not found" });
+
+        res.status(200).json({ success: true, user: result.value });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Server error updating role" });
+    }
+});
+
+app.patch('/users/:id/suspend', verifyFBToken, async (req, res) => {
+    const { id } = req.params;
+    const { reason, feedback } = req.body;
+    if (!reason) return res.status(400).json({ message: "Suspend reason is required" });
+
+    if (!ObjectId.isValid(id)) {
+        return res.status(400).json({ message: "Invalid user ID format" });
+    }
+
+    try {
+        const result = await usersCollection.findOneAndUpdate(
+            { _id: new ObjectId(id) },
+            { $set: { status: "suspended", suspendReason: reason, suspendFeedback: feedback || "" } },
+            { returnDocument: "after" }
+        );
+        if (!result.value) return res.status(404).json({ message: "User not found" });
+        res.status(200).json({ success: true, user: result.value });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Server error suspending user" });
+    }
+});
+
+
+
+
 // Get all available loans
 app.get('/loans', async (req, res) => {
     try {
