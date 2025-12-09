@@ -261,7 +261,7 @@ app.patch("/admin/loans/:id/toggle-home", verifyFBToken, async (req, res) => {
 
 
 // Get all available loans
-app.get('/loans', async (req, res) => {
+app.get('/AvailableLoans', async (req, res) => {
     try {
         const loans = await loansCollection.find({ showOnHome: true }).toArray();
         res.status(200).json(loans);
@@ -270,6 +270,19 @@ app.get('/loans', async (req, res) => {
         res.status(500).json({ message: "Server error fetching loans" });
     }
 });
+
+// ✅ Get all available loans (for everyone — admin or homepage)
+app.get('/loans', async (req, res) => {
+    try {
+        // 🔹 No filter, get all loans from DB
+        const loans = await loansCollection.find().sort({ createdAt: -1 }).toArray();
+        res.status(200).json(loans);
+    } catch (err) {
+        console.error("Error fetching loans:", err);
+        res.status(500).json({ message: "Server error fetching loans" });
+    }
+});
+
 
 // Get single loan by ID
 app.get('/loans/:id', async (req, res) => {
