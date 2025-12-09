@@ -396,6 +396,61 @@ app.post('/add-loan', async (req, res) => {
 });
 
 
+app.get('/loan-applications/pending', async (req, res) => {
+    try {
+        const query = { status: "Pending" };
+        const result = await loanApplicationsCollection.find(query).toArray();
+        res.send(result);
+    } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to fetch pending applications" });
+    }
+});
+
+app.patch('/loan-applications/:id/status', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const newStatus = req.body.status;
+
+        if (!newStatus || (newStatus !== 'Approved' && newStatus !== 'Rejected')) {
+            return res.status(400).send({ message: "Invalid status provided" });
+        }
+
+        const filter = { _id: new ObjectId(id) };
+
+        let updateData = { status: newStatus };
+
+        // Approve করা হলে approvedAt টাইমস্ট্যাম্প যোগ করা
+        if (newStatus === 'Approved') {
+            updateData.approvedAt = new Date();
+        }
+
+        const updateDoc = {
+            $set: updateData,
+        };
+
+        const result = await loanApplicationsCollection.updateOne(filter, updateDoc);
+
+        if (result.matchedCount === 0) {
+            return res.status(404).send({ message: "Application not found" });
+        }
+
+        // এখানে loanTitle ফেরত পাঠানো হচ্ছে যাতে front-end Swal মেসেজটি সুন্দর হয়
+        const updatedLoan = await loanApplicationsCollection.findOne(filter);
+
+        res.send({
+            message: "Status updated successfully",
+            loanTitle: updatedLoan ? updatedLoan.loanTitle : id,
+            modifiedCount: result.modifiedCount
+        });
+
+    } catch (err) {
+        console.error("Status update error:", err);
+        res.status(500).send({ message: "Failed to update status" });
+    }
+});
+
+
 // Get single loan by ID
 app.get('/loans/:id', async (req, res) => {
     try {
