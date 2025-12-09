@@ -190,11 +190,80 @@ app.patch('/users/:id/suspend', verifyFBToken, async (req, res) => {
 
 
 
+// ✅ Get all loans (no verifyAdmin)
+app.get("/admin/loans", verifyFBToken, async (req, res) => {
+    try {
+        const loans = await loansCollection.find().sort({ createdAt: -1 }).toArray();
+        res.json(loans);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Failed to fetch all loans" });
+    }
+});
+
+// ✅ Update a loan
+app.patch("/admin/loans/:id", verifyFBToken, async (req, res) => {
+    const id = req.params.id;
+    const updateData = req.body;
+
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid loan ID" });
+
+    try {
+        const result = await loansCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { ...updateData, updatedAt: new Date() } }
+        );
+        res.json({ message: "Loan updated successfully", modifiedCount: result.modifiedCount });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Failed to update loan" });
+    }
+});
+
+// ✅ Delete a loan
+app.delete("/admin/loans/:id", verifyFBToken, async (req, res) => {
+    const id = req.params.id;
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid loan ID" });
+
+    try {
+        const result = await loansCollection.deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 0)
+            return res.status(404).json({ message: "Loan not found" });
+
+        res.json({ message: "Loan deleted successfully" });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Failed to delete loan" });
+    }
+});
+
+// ✅ Toggle showOnHome
+app.patch("/admin/loans/:id/toggle-home", verifyFBToken, async (req, res) => {
+    const id = req.params.id;
+    const { showOnHome } = req.body;
+
+    if (!ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid loan ID" });
+
+    try {
+        const result = await loansCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { showOnHome: !!showOnHome } }
+        );
+        res.json({ message: "Show on Home status updated", modifiedCount: result.modifiedCount });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Failed to toggle show on home" });
+    }
+});
+
+
+
+
 
 // Get all available loans
 app.get('/loans', async (req, res) => {
     try {
-        const loans = await loansCollection.find().toArray();
+        const loans = await loansCollection.find({ showOnHome: true }).toArray();
         res.status(200).json(loans);
     } catch (err) {
         console.error("Error fetching loans:", err);
