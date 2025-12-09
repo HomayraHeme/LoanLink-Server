@@ -4,6 +4,8 @@ const cors = require('cors');
 require('dotenv').config();
 const { MongoClient, ObjectId, ServerApiVersion } = require('mongodb');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const crypto = require('crypto');
+
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -13,6 +15,13 @@ app.use(cors());
 
 // ⚠️ Stripe webhook needs raw body, so don't use express.json() for it
 app.use(express.json());
+
+function generateTrackingId() {
+    const prefix = 'LOANLINK';
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const random = crypto.randomBytes(3).toString('hex').toUpperCase(); // 6-character random
+    return `${prefix}-${date}-${random}`;
+}
 
 // MongoDB setup
 const uri = `mongodb+srv://${process.env.DB_USERNAME}:${process.env.DB_PASSWORD}@cluster0.qswuexk.mongodb.net/?appName=Cluster0`;
@@ -34,6 +43,7 @@ async function run() {
 
         const db = client.db("LoanLinkDB");
         loanApplicationsCollection = db.collection("loanApplications");
+        loansCollection = db.collection("loans");
 
     } catch (err) {
         console.error("MongoDB connection error:", err);
@@ -47,6 +57,37 @@ run().catch(console.error);
 app.get('/', (req, res) => {
     res.send('LoanLink server is running 🚀');
 });
+
+app.get('/loans', async (req, res) => {
+    try {
+        // ⚠️ Use the correct variable name: loansCollection
+        const loans = await loansCollection.find().toArray();
+        res.status(200).json(loans);
+    } catch (err) {
+        console.error("Error fetching loans:", err);
+        res.status(500).json({ message: "Server error fetching loans" });
+    }
+});
+
+// 📍 2️⃣ Get single loan by ID
+app.get('/loans/:id', async (req, res) => {
+    try {
+        const { id } = req.params;
+        // ⚠️ Use the correct variable name: loansCollection
+        const loan = await loansCollection.findOne({ _id: new ObjectId(id) });
+
+        if (!loan) {
+            return res.status(404).json({ message: "Loan not found" });
+        }
+
+        res.status(200).json(loan);
+    } catch (err) {
+        console.error("Error fetching loan:", err);
+        res.status(500).json({ message: "Server error fetching loan" });
+    }
+});
+
+
 
 // Get all loans for a user
 app.get('/my-loans', async (req, res) => {
@@ -127,15 +168,24 @@ app.post('/create-payment-session', async (req, res) => {
 
 app.patch('/payment-success', async (req, res) => {
     const { session_id } = req.query;
+
+    // 1. Session Retrieve
     const session = await stripe.checkout.sessions.retrieve(session_id);
     console.log('session retrieved', session);
+
     if (session.payment_status === 'paid') {
+
+        // 💡 ট্রানজেকশন আইডি হিসেবে payment_intent আইডি ব্যবহার করুন
+        const transactionId = session.payment_intent;
+
         const id = session.metadata.loanId;
         const query = { _id: new ObjectId(id) };
         const Update = {
             $set: {
                 applicationFeeStatus: "Paid",
-
+                // 2. ট্রানজেকশন আইডি ডাটাবেসে সেভ করুন
+                transactionId: transactionId,
+                trackingId: generateTrackingId()
             }
         }
         const result = await loanApplicationsCollection.updateOne(query, Update);
