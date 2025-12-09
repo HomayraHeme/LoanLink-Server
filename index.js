@@ -6,15 +6,19 @@ const { MongoClient, ObjectId, ServerApiVersion } = require('mongodb');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const crypto = require('crypto');
 
+const admin = require("firebase-admin");
+
+const serviceAccount = require("./loanlink-firebase-adminsdk.json");
+
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+});
+
 
 const app = express();
 const port = process.env.PORT || 3000;
 
-// Middleware
-app.use(cors());
-
-// ⚠️ Stripe webhook needs raw body, so don't use express.json() for it
-app.use(express.json());
+// --- Utility Functions ---
 
 function generateTrackingId() {
     const prefix = 'LOANLINK';
@@ -23,7 +27,32 @@ function generateTrackingId() {
     return `${prefix}-${date}-${random}`;
 }
 
-// MongoDB setup
+// --- Custom Middleware ---
+
+const verifyFBToken = async (req, res, next) => {
+    const token = req.headers.authorization;
+
+    if (!token) {
+        return res.status(401).send({ message: "unauthorized access" })
+    }
+    try {
+        const idToken = token.split(' ')[1];
+        const decoded = await admin.auth().verifyIdToken(idToken);
+        console.log('decoded in the token', decoded);
+        req.decoded_email = decoded.email;
+        next();
+    }
+    catch (err) {
+        return res.status(401).send({ message: "unauthorized access" })
+    }
+    console.log('headers', req.headers.authorization);
+
+}
+// --- Middleware Setup ---
+app.use(cors());
+
+app.use(express.json());
+
 const uri = `mongodb+srv://${process.env.DB_USERNAME}:${process.env.DB_PASSWORD}@cluster0.qswuexk.mongodb.net/?appName=Cluster0`;
 const client = new MongoClient(uri, {
     serverApi: {
@@ -34,6 +63,9 @@ const client = new MongoClient(uri, {
 });
 
 let loanApplicationsCollection;
+let loansCollection;
+let usersCollection;
+let managerCollection;
 
 // Connect to MongoDB
 async function run() {
@@ -44,6 +76,9 @@ async function run() {
         const db = client.db("LoanLinkDB");
         loanApplicationsCollection = db.collection("loanApplications");
         loansCollection = db.collection("loans");
+        usersCollection = db.collection("users");
+        managerCollection = db.collection("managers");
+
 
     } catch (err) {
         console.error("MongoDB connection error:", err);
@@ -51,16 +86,51 @@ async function run() {
 }
 run().catch(console.error);
 
-// --- Routes ---
 
-// Test route
 app.get('/', (req, res) => {
     res.send('LoanLink server is running 🚀');
 });
 
+
+// user api
+app.post('/users', async (req, res) => {
+    const user = req.body;
+    user.role = 'borrower'; // default role
+    user.createdAt = new Date();
+    const email = user.email;
+    const userExists = await usersCollection.findOne({ email });
+    if (userExists) {
+        return res.send({ message: "User already exists" });
+    }
+
+    const result = await usersCollection.insertOne(user);
+    res.send(result);
+});
+
+
+app.get('/users/:email', verifyFBToken, async (req, res) => {
+    const email = req.params.email;
+
+    if (req.decoded_email !== email) {
+        return res.status(403).send({ message: "Forbidden: Email mismatch" });
+    }
+
+    try {
+        const user = await usersCollection.findOne({ email });
+        if (!user) {
+            return res.status(404).json({ message: "User profile data not found in DB" });
+        }
+        const { password, ...safeUser } = user;
+        res.json(safeUser);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ message: "Server error fetching user" });
+    }
+});
+
+// Get all available loans
 app.get('/loans', async (req, res) => {
     try {
-        // ⚠️ Use the correct variable name: loansCollection
         const loans = await loansCollection.find().toArray();
         res.status(200).json(loans);
     } catch (err) {
@@ -69,11 +139,12 @@ app.get('/loans', async (req, res) => {
     }
 });
 
-// 📍 2️⃣ Get single loan by ID
+// Get single loan by ID
 app.get('/loans/:id', async (req, res) => {
     try {
         const { id } = req.params;
-        // ⚠️ Use the correct variable name: loansCollection
+        if (!ObjectId.isValid(id)) return res.status(400).json({ message: "Invalid loan ID format" });
+
         const loan = await loansCollection.findOne({ _id: new ObjectId(id) });
 
         if (!loan) {
@@ -88,9 +159,8 @@ app.get('/loans/:id', async (req, res) => {
 });
 
 
-
-// Get all loans for a user
-app.get('/my-loans', async (req, res) => {
+// Get all loans for a user (Protected route)
+app.get('/my-loans', verifyFBToken, async (req, res) => {
     const userEmail = req.query.email;
     if (!userEmail) return res.status(400).json({ message: "Email query required" });
 
@@ -146,36 +216,53 @@ app.delete('/loan-applications/:id', async (req, res) => {
 // Create Stripe payment session
 app.post('/create-payment-session', async (req, res) => {
     const { userEmail, loanId } = req.body;
-    const session = await stripe.checkout.sessions.create({
-        payment_method_types: ['card'],
-        line_items: [{
-            price_data: {
-                currency: 'usd',
-                product_data: { name: 'Loan Application Fee' },
-                unit_amount: 1000, // $10
-            },
-            quantity: 1,
-        }],
-        mode: 'payment',
-        customer_email: userEmail,
-        success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?success=true&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${process.env.SITE_DOMAIN}/dashboard/my-loans?success=false`,
-        metadata: { loanId: loanId.toString() },
-    });
 
-    res.send({ url: session.url });
+    if (!userEmail || !loanId) return res.status(400).json({ message: "Missing required fields" });
+
+    try {
+        const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            line_items: [{
+                price_data: {
+                    currency: 'usd',
+                    product_data: { name: 'Loan Application Fee' },
+                    unit_amount: 1000, // $10.00
+                },
+                quantity: 1,
+            }],
+            mode: 'payment',
+            customer_email: userEmail,
+            // Client-side fulfillment redirect (as requested)
+            success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?success=true&session_id={CHECKOUT_SESSION_ID}`,
+            cancel_url: `${process.env.SITE_DOMAIN}/dashboard/my-loans?success=false`,
+            metadata: { loanId: loanId.toString() },
+        });
+
+        res.send({ url: session.url });
+    } catch (error) {
+        console.error("Error creating Stripe session:", error);
+        res.status(500).json({ message: "Error creating payment session" });
+    }
 });
 
+// ⚠️ Unsafe Client-Side Payment Fulfillment Route
 app.patch('/payment-success', async (req, res) => {
     const { session_id } = req.query;
 
-    // 1. Session Retrieve
-    const session = await stripe.checkout.sessions.retrieve(session_id);
-    console.log('session retrieved', session);
+    let session;
+    try {
+        // Retrieve the full session details
+        session = await stripe.checkout.sessions.retrieve(session_id);
+    } catch (err) {
+        console.error("Error retrieving Stripe session:", err);
+        return res.status(500).send({ success: false, message: "Error retrieving session" });
+    }
+
+    console.log('Session retrieved successfully:', session.id);
 
     if (session.payment_status === 'paid') {
 
-        // 💡 ট্রানজেকশন আইডি হিসেবে payment_intent আইডি ব্যবহার করুন
+        // ✅ Get Transaction ID (Payment Intent ID)
         const transactionId = session.payment_intent;
 
         const id = session.metadata.loanId;
@@ -183,15 +270,22 @@ app.patch('/payment-success', async (req, res) => {
         const Update = {
             $set: {
                 applicationFeeStatus: "Paid",
-                // 2. ট্রানজেকশন আইডি ডাটাবেসে সেভ করুন
-                transactionId: transactionId,
-                trackingId: generateTrackingId()
+                transactionId: transactionId, // Store the payment intent ID
+                trackingId: generateTrackingId() // Store the generated tracking ID
             }
         }
-        const result = await loanApplicationsCollection.updateOne(query, Update);
-        res.send(result)
+
+        try {
+            const result = await loanApplicationsCollection.updateOne(query, Update);
+            // In case of error, you might want to return an error status here.
+            res.send(result)
+        } catch (dbErr) {
+            console.error("Database update error on payment success:", dbErr);
+            res.status(500).send({ success: false, message: "Database update failed" });
+        }
+    } else {
+        res.send({ success: false, message: "Payment not yet paid or status unknown" });
     }
-    res.send({ success: false })
 });
 
 // Start server
