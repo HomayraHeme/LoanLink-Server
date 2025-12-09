@@ -283,6 +283,58 @@ app.get('/loans', async (req, res) => {
     }
 });
 
+// POST /add-loan
+app.post('/add-loan', async (req, res) => {
+    try {
+
+        const {
+            title,
+            short_description,
+            description,
+            loan_category,
+            interest_rate,
+            max_loan_limit,
+            requiredDocuments,
+            available_emi_plan,
+            image,
+            showOnHome,
+            createdBy,
+            created_at
+        } = req.body;
+        if (!title || !description || !loan_category || !interest_rate || !max_loan_limit || !image || !createdBy) {
+            return res.status(400).json({ message: "Missing required fields. Check: title, description, loan_category, interest_rate, max_loan_limit, image, createdBy." });
+        }
+
+        const newLoan = {
+            title,
+            short_description: short_description || "",
+            description,
+            loan_category,
+            interest_rate: parseFloat(interest_rate),
+            max_loan_limit: parseFloat(max_loan_limit),
+
+            requiredDocuments: requiredDocuments || [],
+            available_emi_plan: available_emi_plan || [],
+            image: image,
+            images: [image],
+
+            showOnHome: showOnHome || false,
+            createdBy,
+            created_at: created_at || new Date().toISOString()
+        };
+
+        const result = await loansCollection.insertOne(newLoan);
+
+        res.status(201).json({
+            message: "Loan added successfully",
+            insertedId: result.insertedId
+        });
+    } catch (err) {
+        console.error("Error adding loan:", err);
+        res.status(500).json({ message: "Failed to add loan. Internal Server Error." });
+    }
+});
+
 
 // Get single loan by ID
 app.get('/loans/:id', async (req, res) => {
@@ -321,27 +373,77 @@ app.get('/my-loans', verifyFBToken, async (req, res) => {
     }
 });
 
-// Submit a loan application
+
 app.post('/loan-applications', async (req, res) => {
     const application = req.body;
     if (!application.userEmail || !application.loanAmount) {
         return res.status(400).json({ message: "Missing required fields" });
     }
 
+    const categoryToSave = application.loan_category || "General";
+
     try {
         const finalApp = {
+            status: application.status || "Pending",
+            applicationFeeStatus: application.applicationFeeStatus || "Unpaid",
+            loan_category: categoryToSave,
+            userEmail: application.userEmail || "N/A",
+            appliedAt: new Date(),
+            ...application
+        };
+
+
+        const finalAppClean = {
             ...application,
+            loan_category: application.loan_category,
+            loan_category: application.loan_category || "General",
             status: application.status || "Pending",
             applicationFeeStatus: application.applicationFeeStatus || "Unpaid",
             appliedAt: new Date()
         };
-        const result = await loanApplicationsCollection.insertOne(finalApp);
+
+        const result = await loanApplicationsCollection.insertOne(finalAppClean);
         res.status(201).json({ message: "Loan application submitted", insertedId: result.insertedId });
     } catch (err) {
         console.error(err);
         res.status(500).json({ message: "Server error submitting loan" });
     }
 });
+
+
+app.get('/loan-applications', async (req, res) => {
+    try {
+        const applications = await loanApplicationsCollection
+            .find()
+            .sort({ appliedAt: -1 })
+            .toArray();
+
+        const userEmails = [...new Set(applications.map(app => app.userEmail))];
+
+        const users = await usersCollection
+            .find({ email: { $in: userEmails } }, { projection: { name: 1, email: 1, _id: 0 } })
+            .toArray();
+        const userMap = new Map(users.map(user => [user.email, user]));
+
+        const applicationsWithUser = applications.map(app => {
+            const user = userMap.get(app.userEmail);
+
+            return {
+                ...app,
+                userEmail: app.userEmail || "N/A",
+                userName: app.userName || user?.name || "Unknown",
+                loan_category: app.loan_category || "General",
+                transactionId: app.transactionId || "N/A",
+            };
+        });
+
+        res.status(200).json(applicationsWithUser);
+    } catch (err) {
+        console.error("Error fetching loan applications:", err);
+        res.status(500).json({ message: "Failed to fetch loan applications" });
+    }
+});
+
 
 // Delete loan application
 app.delete('/loan-applications/:id', async (req, res) => {
@@ -377,7 +479,6 @@ app.post('/create-payment-session', async (req, res) => {
             }],
             mode: 'payment',
             customer_email: userEmail,
-            // Client-side fulfillment redirect (as requested)
             success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?success=true&session_id={CHECKOUT_SESSION_ID}`,
             cancel_url: `${process.env.SITE_DOMAIN}/dashboard/my-loans?success=false`,
             metadata: { loanId: loanId.toString() },
@@ -390,13 +491,12 @@ app.post('/create-payment-session', async (req, res) => {
     }
 });
 
-// ⚠️ Unsafe Client-Side Payment Fulfillment Route
+//  Unsafe Client-Side Payment Fulfillment Route
 app.patch('/payment-success', async (req, res) => {
     const { session_id } = req.query;
 
     let session;
     try {
-        // Retrieve the full session details
         session = await stripe.checkout.sessions.retrieve(session_id);
     } catch (err) {
         console.error("Error retrieving Stripe session:", err);
@@ -407,7 +507,6 @@ app.patch('/payment-success', async (req, res) => {
 
     if (session.payment_status === 'paid') {
 
-        // ✅ Get Transaction ID (Payment Intent ID)
         const transactionId = session.payment_intent;
 
         const id = session.metadata.loanId;
@@ -415,14 +514,13 @@ app.patch('/payment-success', async (req, res) => {
         const Update = {
             $set: {
                 applicationFeeStatus: "Paid",
-                transactionId: transactionId, // Store the payment intent ID
-                trackingId: generateTrackingId() // Store the generated tracking ID
+                transactionId: transactionId,
+                trackingId: generateTrackingId()
             }
         }
 
         try {
             const result = await loanApplicationsCollection.updateOne(query, Update);
-            // In case of error, you might want to return an error status here.
             res.send(result)
         } catch (dbErr) {
             console.error("Database update error on payment success:", dbErr);
@@ -433,7 +531,6 @@ app.patch('/payment-success', async (req, res) => {
     }
 });
 
-// Start server
 app.listen(port, () => {
     console.log(`Server running on port ${port} 🚀`);
 });
