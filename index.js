@@ -283,6 +283,66 @@ app.get('/loans', async (req, res) => {
     }
 });
 
+// DELETE loan by ID
+app.delete('/loans/:id', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+
+        const result = await loansCollection.deleteOne(query);
+
+        if (result.deletedCount === 1) {
+            res.json({ message: "Loan deleted successfully" });
+        } else {
+            res.status(404).json({ message: "Loan not found" });
+        }
+    } catch (err) {
+        console.error("Error deleting loan:", err);
+        res.status(500).json({ message: "Failed to delete loan" });
+    }
+});
+
+// Endpoint: PATCH /loans/:id
+app.patch('/loans/:id', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const filter = { _id: new ObjectId(id) };
+        const updatedFields = req.body;
+
+        const updateDoc = {
+            $set: {
+                ...updatedFields,
+
+                ...(updatedFields.interest_rate !== undefined && {
+                    interest_rate: parseFloat(updatedFields.interest_rate)
+                }),
+                ...(updatedFields.max_loan_limit !== undefined && {
+                    max_loan_limit: parseFloat(updatedFields.max_loan_limit)
+                }),
+
+                lastUpdated: new Date()
+            },
+        };
+
+        const options = { upsert: false };
+        const result = await loansCollection.updateOne(filter, updateDoc, options);
+
+        if (result.matchedCount === 0) {
+            return res.status(404).json({ message: "Loan not found" });
+        }
+
+
+        res.json({
+            message: "Loan updated successfully",
+            modifiedCount: result.modifiedCount
+        });
+
+    } catch (err) {
+        console.error("Error patching loan:", err);
+        res.status(500).json({ message: "Failed to patch loan", error: err.message });
+    }
+});
+
 // POST /add-loan
 app.post('/add-loan', async (req, res) => {
     try {
@@ -356,7 +416,6 @@ app.get('/loans/:id', async (req, res) => {
 });
 
 
-// Get all loans for a user (Protected route)
 app.get('/my-loans', verifyFBToken, async (req, res) => {
     const userEmail = req.query.email;
     if (!userEmail) return res.status(400).json({ message: "Email query required" });
