@@ -419,8 +419,6 @@ app.patch('/loan-applications/:id/status', async (req, res) => {
         const filter = { _id: new ObjectId(id) };
 
         let updateData = { status: newStatus };
-
-        // Approve করা হলে approvedAt টাইমস্ট্যাম্প যোগ করা
         if (newStatus === 'Approved') {
             updateData.approvedAt = new Date();
         }
@@ -434,8 +432,6 @@ app.patch('/loan-applications/:id/status', async (req, res) => {
         if (result.matchedCount === 0) {
             return res.status(404).send({ message: "Application not found" });
         }
-
-        // এখানে loanTitle ফেরত পাঠানো হচ্ছে যাতে front-end Swal মেসেজটি সুন্দর হয়
         const updatedLoan = await loanApplicationsCollection.findOne(filter);
 
         res.send({
@@ -558,6 +554,21 @@ app.get('/loan-applications', async (req, res) => {
     }
 });
 
+app.get('/loan-applications/approved', async (req, res) => {
+    try {
+        // ✅ শুধুমাত্র 'Approved' স্ট্যাটাস খোঁজা হচ্ছে
+        const query = { status: "Approved" };
+
+        // approvedAt অনুসারে সাজানো হচ্ছে (সবচেয়ে সাম্প্রতিক অ্যাপ্রুভাল প্রথমে)
+        const sortOptions = { approvedAt: -1 };
+
+        const result = await loanApplicationsCollection.find(query).sort(sortOptions).toArray();
+        res.send(result);
+    } catch (err) {
+        console.error(err);
+        res.status(500).send({ message: "Failed to fetch approved applications" });
+    }
+});
 
 // Delete loan application
 app.delete('/loan-applications/:id', async (req, res) => {
